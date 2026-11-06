@@ -27,8 +27,8 @@
   color-scheme:light;
 }
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
-body{background:var(--paper);color:var(--ink);font:16px/1.5 var(--body);display:flex;flex-direction:column;min-height:100%}
+html,body{margin:0}
+body{background:var(--paper);color:var(--ink);font:16px/1.5 var(--body);display:flex;flex-direction:column;min-height:100vh}
 a{color:var(--sunset)}
 button,input,select{font-family:var(--heading);font-size:15px}
 button{cursor:pointer}
@@ -62,10 +62,10 @@ button{cursor:pointer}
 .tabs button[aria-selected="true"]{color:var(--pine-deep);border-bottom-color:var(--sunset)}
 
 /* Views */
-.view{flex:1;display:none;min-height:0}
+.view{flex:1 0 auto;display:none}
 .view.active{display:flex}
 #view-map{position:relative}
-#map{flex:1;min-height:520px;background:#cfd8c8}
+#map{flex:1;height:clamp(520px,78vh,900px);width:100%;background:#cfd8c8}
 #map .leaflet-tile-pane{filter:sepia(.35) saturate(.85) contrast(.95)}
 .leaflet-container{font-family:var(--body)}
 .leaflet-popup-content-wrapper{background:var(--card);color:var(--ink);border:2px solid var(--ink);border-radius:4px;box-shadow:4px 4px 0 var(--ink)}
@@ -80,6 +80,9 @@ button{cursor:pointer}
 .stop-icon{width:10px;height:10px;border-radius:50%;background:var(--paper);border:2px solid var(--ink)}
 .stop-icon.major{width:14px;height:14px;background:var(--gold)}
 
+.motion{position:absolute;right:12px;top:12px;z-index:500;background:var(--card);border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);padding:6px 10px;font-family:var(--heading);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.motion[aria-pressed="false"]{background:var(--paper-2);color:var(--ink-soft)}
+.ledger.open ~ .motion, #view-map:has(.ledger.open) .motion{display:none}
 .legend{position:absolute;left:12px;bottom:12px;z-index:500;background:var(--card);border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);padding:8px 10px;font-family:var(--heading);font-size:12px;letter-spacing:.04em;display:grid;gap:4px}
 .legend span{display:flex;align-items:center;gap:6px}
 .legend i{width:12px;height:12px;border-radius:50%;display:inline-block}
@@ -88,6 +91,10 @@ button{cursor:pointer}
 .ledger{position:absolute;top:12px;right:12px;bottom:12px;width:min(380px,calc(100% - 24px));z-index:600;background:var(--card);border:2px solid var(--ink);box-shadow:5px 5px 0 var(--ink);display:flex;flex-direction:column;overflow:hidden;transform:translateX(calc(100% + 24px));transition:transform .25s ease}
 .ledger.open{transform:none}
 @media (prefers-reduced-motion:reduce){.ledger{transition:none}}
+@media (max-width:700px){
+  .ledger{top:auto;left:12px;right:12px;bottom:12px;width:auto;height:52%;transform:translateY(calc(100% + 24px))}
+  .legend{display:none}
+}
 .ledger header{padding:12px 14px;background:var(--pine);color:var(--paper);display:flex;align-items:flex-start;gap:10px}
 .ledger header h2{font-family:var(--heading);font-weight:600;font-size:20px;letter-spacing:.04em;margin:0;flex:1;line-height:1.2}
 .ledger header .close{background:none;border:0;color:var(--paper);font-size:22px;line-height:1;padding:0 4px}
@@ -106,6 +113,11 @@ button{cursor:pointer}
 .stops li{position:relative;padding:5px 0 5px 24px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
 .stops li::before{content:"";position:absolute;left:2px;top:11px;width:9px;height:9px;border-radius:50%;background:var(--paper);border:2px solid var(--ink)}
 .stops li.end::before{background:var(--sunset)}
+.stops li.next{background:rgba(222,164,58,.28);font-weight:600}
+.stops li.next::before{background:var(--sunset);box-shadow:0 0 0 3px rgba(207,90,42,.35)}
+.stops li.done{opacity:.6}
+.stops .time b{font-weight:600;color:var(--ink)}
+.stops .time b.warn{color:var(--warn)} .stops .time b.bad{color:var(--bad)}
 .stops li:hover{background:rgba(222,164,58,.18)}
 .stops .code{font-family:var(--heading);font-size:12px;color:var(--ink-soft);min-width:38px;letter-spacing:.06em}
 .stops .time{margin-left:auto;font-family:var(--heading);font-size:13px;font-variant-numeric:tabular-nums;color:var(--ink-soft)}
@@ -177,6 +189,7 @@ footer a{color:var(--gold)}
 
 <section id="view-map" class="view active" role="tabpanel">
   <div id="map"></div>
+  <button class="motion" id="motion-toggle" aria-pressed="true" title="Roll trains forward along their routes between position reports">Motion: on</button>
   <div class="legend">
     <span><i style="background:var(--good)"></i>On time</span>
     <span><i style="background:var(--warn)"></i>Running late</span>
@@ -234,7 +247,8 @@ footer a{color:var(--gold)}
 const API = 'https://api-v3.amtraker.com/v3';
 const ROUTES_URL = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/NTAD_Amtrak_Routes/FeatureServer/0/query?where=1%3D1&outFields=name,ROUTE_URL&outSR=4326&f=geojson';
 const ROUTE_COLORS = ['#cf5a2a','#1e4a3a','#5f9fb8','#b8791f','#7a3b6b','#2f7a4f','#a93a2c','#3f6a9c','#8c6a2b','#4a5d8a'];
-const REFRESH_MS = 60000;
+const REFRESH_MS = 30000;
+const MAX_EXTRAP_MS = 4*60000; // never project a train more than 4 minutes past its last fix
 
 const $ = id => document.getElementById(id);
 const state = { stations:{}, trains:[], routes:[], routeByName:new Map(), routeStops:new Map(), liveByRoute:new Map(), selectedRoute:null };
@@ -344,21 +358,77 @@ function trainPopup(t){
     <div class="small" style="margin-top:6px"><a href="#" data-train="${esc(t.trainID)}" class="show-stops">See all stops</a></div>`;
 }
 
+/* ---------- live train markers with motion ---------- */
+const markers = new Map();   // trainID -> {marker, real:[lat,lon], shown:[lat,lon], from:[lat,lon], glideStart, t0, speedKmh, dir, route, idx}
+let motionOn = true;
+const HEAD = {N:0,NE:45,E:90,SE:135,S:180,SW:225,W:270,NW:315};
+function trainIcon(t){
+  const cls=timeliness(t); const deg=HEAD[t.heading] ?? 0;
+  return L.divIcon({className:'',html:`<div class="train-icon ${cls}" style="transform:rotate(${deg}deg)"><div class="arrow"></div></div>`,iconSize:[22,22],iconAnchor:[11,11]});
+}
+function kmBetween(a,b){ const k=Math.cos((a[0]+b[0])/2*Math.PI/180); const dy=(b[0]-a[0])*111.32, dx=(b[1]-a[1])*111.32*k; return Math.hypot(dx,dy); }
+function routeTrack(r){ // flattened polyline with cumulative km, built once
+  if(r.track) return r.track;
+  const g=r.feature.geometry; const parts=g.type==='MultiLineString'?g.coordinates:[g.coordinates];
+  const pts=[]; let cum=0;
+  parts.forEach(part=>part.forEach((c,i)=>{ const p=[c[1],c[0]]; if(pts.length){ cum+= i===0?0:kmBetween(pts[pts.length-1].p,p); } pts.push({p,cum}); }));
+  r.track=pts; return pts;
+}
+function nearestIdx(track,p){ let best=1e18,bi=0; for(let i=0;i<track.length;i++){ const d=(track[i].p[0]-p[0])**2+((track[i].p[1]-p[1])*Math.cos(p[0]*Math.PI/180))**2; if(d<best){best=d;bi=i;} } return Math.sqrt(best)*111.32<3?bi:-1; }
+function pickDir(track,i,heading){
+  const h=HEAD[heading]; if(h==null) return 0;
+  const j=Math.min(track.length-1,i+3), k=Math.max(0,i-3); if(j===k) return 0;
+  const a=track[k].p,b=track[j].p; const ang=Math.atan2((b[1]-a[1])*Math.cos(a[0]*Math.PI/180),(b[0]-a[0]))*180/Math.PI; // bearing of +index direction
+  let diff=Math.abs(((ang-h)%360+540)%360-180); // 0 = same direction
+  return diff<90?1:-1;
+}
+function alongTrack(track,i,dir,km){ // walk km along the track from index i
+  if(dir===0||i<0) return track[i]?.p;
+  let cur=i;
+  while(km>0){ const nx=cur+dir; if(nx<0||nx>=track.length) break; const seg=Math.abs(track[nx].cum-track[cur].cum); if(seg>5) break; /* part boundary */ if(seg>=km){ const f=km/seg; return [track[cur].p[0]+(track[nx].p[0]-track[cur].p[0])*f, track[cur].p[1]+(track[nx].p[1]-track[cur].p[1])*f]; } km-=seg; cur=nx; }
+  return track[cur].p;
+}
 function drawTrains(){
-  trainLayer.clearLayers();
-  const sel = state.selectedRoute;
+  const sel = state.selectedRoute; const seen=new Set(); const now=Date.now();
   state.trains.forEach(t=>{
     if(!t.lat||!t.lon) return;
     if(sel && !sel.liveNames.has(t.routeName)) return;
-    const cls=timeliness(t);
-    const deg = {N:0,NE:45,E:90,SE:135,S:180,SW:225,W:270,NW:315}[t.heading] ?? 0;
-    const m=L.marker([t.lat,t.lon],{icon:L.divIcon({className:'',html:`<div class="train-icon ${cls}" style="transform:rotate(${deg}deg)"><div class="arrow"></div></div>`,iconSize:[22,22],iconAnchor:[11,11]}),zIndexOffset:1000});
-    m.bindTooltip(`${t.routeName} #${t.trainNum} · ${t.trainTimely||''}`);
-    m.bindPopup(trainPopup(t));
-    m._train=t;
-    m.addTo(trainLayer);
+    seen.add(t.trainID);
+    const real=[t.lat,t.lon];
+    let m=markers.get(t.trainID);
+    const r=matchRouteName(t.routeName); const track=r?routeTrack(r):null;
+    const idx=track?nearestIdx(track,real):-1; const dir=track&&idx>=0?pickDir(track,idx,t.heading):0;
+    const fix=Date.parse(t.lastValTS||t.updatedAt||'')||now; const t0=Math.max(fix, now-MAX_EXTRAP_MS/2);
+    if(!m){
+      const marker=L.marker(real,{icon:trainIcon(t),zIndexOffset:1000}).addTo(trainLayer);
+      marker._train=t; marker.bindTooltip(''); marker.on('click',()=>showTrain(marker._train));
+      m={marker,real,shown:real,from:real,glideStart:0,t0,speedKmh:(t.velocity||0)*1.609,dir,track,idx,t};
+      markers.set(t.trainID,m);
+    }else{
+      const moved=kmBetween(m.real,real)>0.02;
+      m.from=m.shown; m.real=real; m.glideStart=moved?now:0; m.t0=t0; m.speedKmh=(t.velocity||0)*1.609; m.dir=dir; m.track=track; m.idx=idx; m.t=t;
+      m.marker.setIcon(trainIcon(t)); m.marker._train=t;
+    }
+    m.marker.setTooltipContent(`${t.routeName} #${t.trainNum} · ${t.trainTimely||''}`);
   });
+  markers.forEach((m,id)=>{ if(!seen.has(id)){ trainLayer.removeLayer(m.marker); markers.delete(id); } });
 }
+function animateTrains(){
+  const now=Date.now();
+  markers.forEach(m=>{
+    let target=m.real;
+    if(motionOn && m.speedKmh>2 && m.track && m.idx>=0 && m.dir!==0){
+      const dt=Math.min(MAX_EXTRAP_MS, now-m.t0); const km=m.speedKmh*dt/3600000;
+      target=alongTrack(m.track,m.idx,m.dir,km)||m.real;
+    }
+    let pos=target;
+    if(m.glideStart){ const f=Math.min(1,(now-m.glideStart)/1500); const e=1-Math.pow(1-f,3); pos=[m.from[0]+(target[0]-m.from[0])*e, m.from[1]+(target[1]-m.from[1])*e]; if(f>=1) m.glideStart=0; }
+    if(pos!==m.shown){ m.shown=pos; m.marker.setLatLng(pos); }
+  });
+  setTimeout(()=>requestAnimationFrame(animateTrains), 500);
+}
+requestAnimationFrame(animateTrains);
+$('motion-toggle').addEventListener('click',()=>{ motionOn=!motionOn; const b=$('motion-toggle'); b.setAttribute('aria-pressed',String(motionOn)); b.textContent='Motion: '+(motionOn?'on':'off'); });
 map.on('popupopen',e=>{
   const a=e.popup.getElement()?.querySelector('.show-stops');
   if(a) a.addEventListener('click',ev=>{ ev.preventDefault(); const t=state.trains.find(x=>x.trainID===a.dataset.train); if(t) showTrain(t); });
@@ -449,7 +519,7 @@ function selectRoute(r){
   const ends=new Set([r.stops[0], r.stops[r.stops.length-1]]);
   drawStops(r.stops, ends);
   drawTrains();
-  try{ map.fitBounds(L.geoJSON(r.feature).getBounds(),{paddingTopLeft:[20,20],paddingBottomRight:[window.innerWidth>700?400:20,20]}); }catch(e){}
+  try{ map.fitBounds(L.geoJSON(r.feature).getBounds(),{paddingTopLeft:[20,20],paddingBottomRight:[window.innerWidth>700?400:20, window.innerWidth>700?20:Math.round(map.getSize().y*0.55)]}); }catch(e){}
   const trains=r.trains.slice().sort((a,b)=>(+a.trainNum||0)-(+b.trainNum||0));
   const chips=trains.length?trains.map(t=>`<span class="chip ${timeliness(t)}" data-train="${esc(t.trainID)}">#${esc(t.trainNum)} ${esc(t.trainTimely||'')}</span>`).join(''):'<span class="small">No trains from this line are in the live feed right now.</span>';
   const stops=r.stops.length?`<ul class="stops">${r.stops.map(c=>{const s=state.stations[c];return `<li data-code="${esc(c)}" class="${ends.has(c)?'end':''}"><span class="code">${esc(c)}</span><span>${esc(s?s.name:c)}</span></li>`;}).join('')}</ul>
@@ -464,18 +534,32 @@ function selectRoute(r){
 }
 
 function showTrain(t){
-  if(t.lat&&t.lon) map.flyTo([t.lat,t.lon],7);
-  const rows=t.stations.map(s=>{
-    const st=stationStatus(s); const sch=s.schDep||s.schArr; const act=s.dep||s.arr;
-    return `<li data-code="${esc(s.code)}" class="${s.code===t.origCode||s.code===t.destCode?'end':''}"><span class="code">${esc(s.code)}</span><span>${esc(s.name)}${s.status==='Departed'?' ✓':''}</span><span class="time" title="${esc(st.text)}">${fmtTime(act||sch,s.tz)}</span></li>`;
+  if(t.lat&&t.lon) map.flyTo([t.lat,t.lon],Math.max(map.getZoom(),7));
+  const nextIdx=t.stations.findIndex(s=>s.status!=='Departed');
+  const rows=t.stations.map((s,i)=>{
+    const st=stationStatus(s);
+    const isDest=s.code===t.destCode, isOrig=s.code===t.origCode;
+    const sch=isDest?(s.schArr||s.schDep):(s.schDep||s.schArr);
+    const est=isDest?(s.arr||s.dep):(s.dep||s.arr);
+    const schT=fmtTime(sch,s.tz), estT=fmtTime(est,s.tz);
+    const done=s.status==='Departed';
+    const label=done?'left':(i===nextIdx?'ETA':'est');
+    const timeHtml = estT!=='—' && estT!==schT
+      ? `<span class="time"><s class="small">${esc(schT)}</s> <b class="${st.cls==='good'?'':st.cls}">${esc(estT)}</b> <span class="small">${label}</span></span>`
+      : `<span class="time">${esc(schT)}${done?' <span class="small">left</span>':(i===nextIdx?' <span class="small">ETA</span>':'')}</span>`;
+    return `<li data-code="${esc(s.code)}" class="${isOrig||isDest?'end':''}${i===nextIdx?' next':''}${done?' done':''}"><span class="code">${esc(s.code)}</span><span>${esc(s.name)}${s.bus?' (bus)':''}</span>${timeHtml}</li>`;
   }).join('');
+  const nxt=t.stations[nextIdx];
   openLedger(`${t.routeName} #${t.trainNum}`, `
     <p>${esc(t.origName)} → ${esc(t.destName)}</p>
-    <p><span class="chip ${timeliness(t)}">${esc(t.trainTimely||'Status unknown')}</span> ${t.velocity?`<span class="chip">${Math.round(t.velocity)} mph</span>`:''}</p>
+    <p><span class="chip ${timeliness(t)}">${esc(t.trainTimely||'Status unknown')}</span> ${t.velocity?`<span class="chip">${Math.round(t.velocity)} mph ${esc(t.heading||'')}</span>`:''}</p>
+    ${nxt?`<p><b>Next stop:</b> ${esc(nxt.name)} · ETA ${esc(fmtTime(nxt.arr||nxt.schArr||nxt.dep||nxt.schDep,nxt.tz))} <span class="small">(${esc(stationStatus(nxt).text)})</span></p>`:''}
     ${t.statusMsg?`<p class="small">${esc(t.statusMsg)}</p>`:''}
-    <h3>Schedule (local times, ✓ = departed)</h3><ul class="stops">${rows}</ul>
-    <p class="small">Last position update: ${esc(fmtTime(t.lastValTS||t.updatedAt, Intl.DateTimeFormat().resolvedOptions().timeZone))}</p>`);
+    <h3>Stops &amp; ETAs (local time)</h3><ul class="stops">${rows}</ul>
+    <p class="small">Struck-through times are the schedule; bold times are Amtrak's current estimate. Last position report: ${esc(fmtTime(t.lastValTS||t.updatedAt, Intl.DateTimeFormat().resolvedOptions().timeZone))}.</p>
+    <p><a class="btn" href="https://www.amtrak.com/home.html" target="_blank" rel="noopener">Book this train</a></p>`);
   $('ledger-body').querySelectorAll('.stops li').forEach(el=>el.addEventListener('click',()=>{ const s=state.stations[el.dataset.code]; if(s&&s.lat) map.flyTo([s.lat,s.lon],9); }));
+  const n=$('ledger-body').querySelector('.stops li.next'); if(n) n.scrollIntoView({block:'center'});
 }
 
 /* ---------- departures ---------- */
