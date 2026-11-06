@@ -154,6 +154,21 @@ button{cursor:pointer}
 .ticket .actions .btn{padding:6px 12px;font-size:12px;box-shadow:2px 2px 0 var(--ink)}
 @media (max-width:560px){.ticket{grid-template-columns:auto 1fr}.ticket .status{grid-column:2;justify-self:start}}
 
+.favs{background:var(--paper-2);border-top:2px solid var(--rule);padding:10px max(16px,env(safe-area-inset-left,0px)) 12px max(16px,env(safe-area-inset-right,0px))}
+.favs[hidden]{display:none}
+.favs-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.favs .lt{font-family:var(--heading);font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--pine-deep)}
+.favs-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x proximity}
+.fav{flex:0 0 auto;width:min(260px,80vw);scroll-snap-align:start;background:var(--card);border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);padding:10px 12px;cursor:pointer;display:grid;gap:4px;position:relative;min-width:0}
+.fav .name{font-family:var(--heading);font-size:16px;font-weight:600;letter-spacing:.03em;padding-right:26px}
+.fav .meta{font-size:13px;color:var(--ink-soft)}
+.fav .eta{font-family:var(--heading);font-size:14px;font-variant-numeric:tabular-nums}
+.fav .st{position:absolute;top:8px;right:8px;width:10px;height:10px;border-radius:50%}
+.fav .st.good{background:var(--good)} .fav .st.warn{background:var(--warn)} .fav .st.bad{background:var(--bad)} .fav .st.neutral{background:var(--rule)}
+.fav.gone{opacity:.65;border-style:dashed}
+.fav .rm{position:absolute;bottom:6px;right:8px;background:none;border:0;color:var(--ink-soft);font-size:12px;font-family:var(--heading);letter-spacing:.06em;text-transform:uppercase;padding:2px 4px}
+.star{background:none;border:0;color:var(--paper);font-size:24px;line-height:1;padding:0 4px;cursor:pointer}
+.star[aria-pressed="true"]{color:var(--gold)}
 footer{padding:14px max(16px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-right,0px));background:var(--pine-deep);color:var(--paper);font-size:13px;text-align:center;font-family:var(--heading);letter-spacing:.04em}
 footer a{color:var(--gold)}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:4px;font-family:var(--heading);z-index:2000;max-width:90vw}
@@ -213,10 +228,15 @@ footer a{color:var(--gold)}
   <aside class="ledger" id="ledger" aria-live="polite">
     <header>
       <h2 id="ledger-title">Route</h2>
+      <button class="star" id="ledger-star" aria-pressed="false" aria-label="Pin this train" title="Pin to My trains" hidden>☆</button>
       <button class="close" id="ledger-close" aria-label="Close panel">×</button>
     </header>
     <div class="scroll" id="ledger-body"></div>
   </aside>
+</section>
+<section class="favs" id="favs">
+  <div class="favs-head"><span class="lt">★ My trains</span><span class="small" id="favs-hint">Tap a train on the map, then ★ to pin it here.</span></div>
+  <div class="favs-row" id="favs-row"></div>
 </section>
 
 <section id="view-departures" class="view" role="tabpanel">
@@ -532,7 +552,7 @@ function computeGeoStops(){
 }
 
 /* ---------- ledger (side panel) ---------- */
-function openLedger(title, html){ $('ledger-title').textContent=title; $('ledger-body').innerHTML=html; $('ledger').classList.add('open'); }
+function openLedger(title, html, starKey){ $('ledger-title').textContent=title; $('ledger-body').innerHTML=html; $('ledger').classList.add('open'); const b=$('ledger-star'); b.hidden=!starKey; b.dataset.key=starKey||''; b.setAttribute('aria-pressed',String(!!starKey&&favs.has(starKey))); b.textContent=(starKey&&favs.has(starKey))?'★':'☆'; }
 $('ledger-close').addEventListener('click',()=>{ $('ledger').classList.remove('open'); state.selectedRoute=null; highlightRoute(null); stopLayer.clearLayers(); drawTrains(); });
 
 function selectRoute(r){
@@ -555,7 +575,8 @@ function selectRoute(r){
 }
 
 function showTrain(t){
-  if(t.lat&&t.lon) map.flyTo([t.lat,t.lon],Math.max(map.getZoom(),7));
+  const mk=markers.get(t.trainID); const at=mk?mk.shown:(t.lat&&t.lon?[t.lat,t.lon]:null);
+  if(at) map.flyTo(at,Math.max(map.getZoom(),7));
   const nextIdx=t.stations.findIndex(s=>s.status!=='Departed');
   const rows=t.stations.map((s,i)=>{
     const st=stationStatus(s);
@@ -578,7 +599,7 @@ function showTrain(t){
     ${t.statusMsg?`<p class="small">${esc(t.statusMsg)}</p>`:''}
     <h3>Stops &amp; ETAs (local time)</h3><ul class="stops">${rows}</ul>
     <p class="small">Struck-through times are the schedule; bold times are Amtrak's current estimate. Last position report: ${esc(fmtTime(t.lastValTS||t.updatedAt, Intl.DateTimeFormat().resolvedOptions().timeZone))}.</p>
-    <p><a class="btn" href="https://www.amtrak.com/home.html" target="_blank" rel="noopener">Book this train</a></p>`);
+    <p><a class="btn" href="https://www.amtrak.com/home.html" target="_blank" rel="noopener">Book this train</a></p>`, favKey(t));
   $('ledger-body').querySelectorAll('.stops li').forEach(el=>el.addEventListener('click',()=>{ const s=state.stations[el.dataset.code]; if(s&&s.lat) map.flyTo([s.lat,s.lon],9); }));
   const n=$('ledger-body').querySelector('.stops li.next'); if(n) n.scrollIntoView({block:'center'});
 }
@@ -608,7 +629,7 @@ function showVia(num,tr){
     ${alerts}
     <h3>Stops &amp; ETAs (local time)</h3><ul class="stops">${rows}</ul>
     <p class="small">Struck-through times are the schedule; bold times are VIA's current estimate.</p>
-    <p><a class="btn" href="https://www.viarail.ca/en" target="_blank" rel="noopener">Book on VIA Rail</a></p>`);
+    <p><a class="btn" href="https://www.viarail.ca/en" target="_blank" rel="noopener">Book on VIA Rail</a></p>`, 'via:'+num.replace(/\s*\(.*\)/,''));
 }
 async function loadVia(){
   let data; try{ data=await getJSON(VIA_URL); }catch(e){ if(!viaWarned){ viaWarned=true; toast('VIA Rail feed is blocking browser requests right now; Canadian trains unavailable.',8000);} return; }
@@ -630,7 +651,7 @@ async function loadVia(){
     m.marker.setTooltipContent(`VIA ${num.replace(/\s*\(.*\)/,'')} · ${tr.from} → ${tr.to}`);
   });
   markers.forEach((m,id)=>{ if(m.via && !seen.has(id)){ viaLayer.removeLayer(m.marker); markers.delete(id); } });
-  $('st-via').textContent=n;
+  $('st-via').textContent=n; renderFavs();
 }
 $('lay-via').addEventListener('change',e=>{
   const on=e.target.checked; $('legend-via').hidden=!on; $('st-via-wrap').hidden=!on;
@@ -675,6 +696,55 @@ $('lay-freight').addEventListener('change',e=>{
   else{ map.removeLayer(freightLayer); freightLayer.clearLayers(); freightCache.clear(); $('freight-hint').hidden=true; }
 });
 map.on('moveend zoomend',()=>{ if(!freightOn) return; clearTimeout(freightMoveTimer); freightMoveTimer=setTimeout(loadFreight,350); });
+
+/* ---------- favorites (★ My trains) ---------- */
+let favs=new Map(); // key -> {label}
+try{ favs=new Map(JSON.parse(localStorage.getItem('railway.favs')||'[]')); }catch(e){}
+function saveFavs(){ try{ localStorage.setItem('railway.favs', JSON.stringify([...favs])); }catch(e){} }
+function favKey(t){ return 'amtrak:'+t.trainNum+':'+norm(t.routeName); }
+function viaNum(k){ return k.slice(4); }
+$('ledger-star').addEventListener('click',()=>{
+  const b=$('ledger-star'); const key=b.dataset.key; if(!key) return;
+  if(favs.has(key)) favs.delete(key); else favs.set(key,{label:$('ledger-title').textContent});
+  saveFavs(); b.setAttribute('aria-pressed',String(favs.has(key))); b.textContent=favs.has(key)?'★':'☆'; renderFavs();
+  if(favs.has(key)) toast('Pinned under the map. It updates with every refresh.',3000);
+});
+function nextStopOf(t){ return t.stations.find(s=>s.status!=='Departed'); }
+function renderFavs(){
+  const row=$('favs-row'); $('favs-hint').hidden=favs.size>0;
+  if(!favs.size){ row.innerHTML=''; return; }
+  const cards=[];
+  favs.forEach((v,key)=>{
+    if(key.startsWith('amtrak:')){
+      const [,num,rn]=key.split(':');
+      const live=state.trains.filter(t=>String(t.trainNum)===num && norm(t.routeName)===rn);
+      if(!live.length){ cards.push({key,html:`<div class="fav gone" data-key="${esc(key)}"><div class="name">${esc(v.label)}</div><div class="meta">Not running right now. It will reappear here when Amtrak starts tracking the next run.</div><button class="rm" data-rm="${esc(key)}">Unpin</button></div>`}); return; }
+      live.forEach(t=>{
+        const nx=nextStopOf(t); const cls=timeliness(t);
+        const eta=nx?fmtTime(nx.arr||nx.schArr||nx.dep||nx.schDep,nx.tz):'—';
+        const lastArr=t.stations[t.stations.length-1];
+        cards.push({key,html:`<div class="fav" data-key="${esc(key)}" data-train="${esc(t.trainID)}"><span class="st ${cls}"></span><div class="name">${esc(t.routeName)} #${esc(t.trainNum)}</div><div class="meta">${esc(t.origName)} → ${esc(t.destName)} · ${esc(t.trainTimely||'')}</div><div class="eta">${nx?`Next: ${esc(nx.name)} · ${esc(eta)}`:'Arrived'}</div><div class="meta">Arrives ${esc(t.destName)} ${esc(fmtTime(lastArr.arr||lastArr.schArr,lastArr.tz))}${t.velocity?` · ${Math.round(t.velocity)} mph`:''}</div><button class="rm" data-rm="${esc(key)}">Unpin</button></div>`});
+      });
+    }else if(key.startsWith('via:')){
+      const num=viaNum(key); let hit=null, hitNum=null;
+      markers.forEach((m,id)=>{ if(m.via && id.replace(/\s*\(.*\)/,'')==='via:'+num){ hit=m; hitNum=id.slice(4); } });
+      if(!hit){ cards.push({key,html:`<div class="fav gone" data-key="${esc(key)}"><div class="name">${esc(v.label)}</div><div class="meta">${$('lay-via').checked?'Not running right now.':'Turn on the VIA Rail layer to track this train.'}</div><button class="rm" data-rm="${esc(key)}">Unpin</button></div>`}); return; }
+      const tr=hit.t; const nx=(tr.times||[]).find(x=>x.eta&&x.eta!=='&mdash;'&&x.eta!=='ARR')||null;
+      cards.push({key,html:`<div class="fav" data-key="${esc(key)}" data-via="${esc(hitNum)}"><span class="st ${viaTimeliness(tr)}"></span><div class="name">VIA #${esc(num)}</div><div class="meta">${esc(tr.from)} → ${esc(tr.to)}</div><div class="eta">${nx?`Next: ${esc(nx.station)} · ${esc(nx.eta)}`:(tr.departed?'En route':'Not yet departed')}</div><div class="meta">${tr.speed?Math.round(tr.speed*0.621)+' mph':''}</div><button class="rm" data-rm="${esc(key)}">Unpin</button></div>`});
+    }
+  });
+  row.innerHTML=cards.map(c=>c.html).join('');
+  row.querySelectorAll('.fav').forEach(el=>el.addEventListener('click',e=>{
+    if(e.target.closest('.rm')) return;
+    switchView('map'); window.scrollTo({top:$('view-map').offsetTop-8,behavior:'smooth'});
+    setTimeout(()=>{ map.invalidateSize();
+      if(el.dataset.train){ const t=state.trains.find(x=>x.trainID===el.dataset.train); if(t){ const m=markers.get(t.trainID); if(m) map.flyTo(m.shown,9); showTrain(t); } }
+      else if(el.dataset.via){ const m=markers.get('via:'+el.dataset.via); if(m){ map.flyTo(m.shown,9); showVia(el.dataset.via,m.t); } }
+    },60);
+  }));
+  row.querySelectorAll('.rm').forEach(b=>b.addEventListener('click',()=>{ favs.delete(b.dataset.rm); saveFavs(); renderFavs(); }));
+}
+renderFavs();
 
 /* ---------- departures ---------- */
 function renderDepartures(){
@@ -802,6 +872,7 @@ async function loadTrains(){
   $('st-ontime').textContent=active.length?Math.round(100*onTime/active.length)+'%':'–';
   $('st-updated').textContent=new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
   if(state.selectedRoute){ const r=state.routes.find(x=>x.id===state.selectedRoute.id); if(r) selectRoute(r); }
+  renderFavs();
 }
 
 async function init(){
