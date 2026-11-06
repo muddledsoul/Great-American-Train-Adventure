@@ -19,6 +19,7 @@ jobs:
           mkdir -p data
           curl -fsSL "https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/NTAD_Amtrak_Routes/FeatureServer/0/query?where=1%3D1&outFields=name,ROUTE_URL&outSR=4326&geometryPrecision=4&f=geojson" -o data/routes.geojson
           python3 -c "import json;d=json.load(open('data/routes.geojson'));assert len(d.get('features',[]))>20, 'too few routes';print(len(d['features']),'routes')"
+          python3 scripts/simplify_routes.py data/routes.geojson data/routes.geojson 0.002
           curl -fsSL "https://api-v3.amtraker.com/v3/stations" -o data/stations.json
           python3 -c "import json;d=json.load(open('data/stations.json'));assert len(d)>300, 'too few stations';print(len(d),'stations')"
           date -u +"%Y-%m-%dT%H:%M:%SZ" > data/updated.txt
