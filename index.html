@@ -80,9 +80,13 @@ button{cursor:pointer}
 .stop-icon{width:10px;height:10px;border-radius:50%;background:var(--paper);border:2px solid var(--ink)}
 .stop-icon.major{width:14px;height:14px;background:var(--gold)}
 
-.motion{position:absolute;right:12px;top:12px;z-index:500;background:var(--card);border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);padding:6px 10px;font-family:var(--heading);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
-.motion[aria-pressed="false"]{background:var(--paper-2);color:var(--ink-soft)}
-.ledger.open ~ .motion, #view-map:has(.ledger.open) .motion{display:none}
+.layers{position:absolute;right:12px;top:12px;z-index:500;background:var(--card);border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);padding:8px 10px;font-family:var(--heading);font-size:13px;display:grid;gap:4px;max-width:230px}
+.layers .lt{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);border-bottom:1px solid var(--rule);padding-bottom:2px}
+.layers label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.layers input{accent-color:var(--sunset);width:15px;height:15px;margin:0}
+#view-map:has(.ledger.open) .layers{display:none}
+.train-icon.via .arrow{border-bottom-color:#8a1c3a}
+.train-icon.via.warn .arrow{border-bottom-color:var(--warn)} .train-icon.via.bad .arrow{border-bottom-color:var(--bad)}
 .legend{position:absolute;left:12px;bottom:12px;z-index:500;background:var(--card);border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);padding:8px 10px;font-family:var(--heading);font-size:12px;letter-spacing:.04em;display:grid;gap:4px}
 .legend span{display:flex;align-items:center;gap:6px}
 .legend i{width:12px;height:12px;border-radius:50%;display:inline-block}
@@ -176,6 +180,7 @@ footer a{color:var(--gold)}
     <span><span class="dot"></span>Trains on the rails: <b id="st-trains">–</b></span>
     <span>On time: <b id="st-ontime">–</b></span>
     <span>Routes: <b id="st-routes">–</b></span>
+    <span id="st-via-wrap" hidden>VIA Rail: <b id="st-via">–</b></span>
     <span>Stations: <b id="st-stations">–</b></span>
   </div>
   <span>Updated <b id="st-updated">never</b></span>
@@ -189,12 +194,21 @@ footer a{color:var(--gold)}
 
 <section id="view-map" class="view active" role="tabpanel">
   <div id="map"></div>
-  <button class="motion" id="motion-toggle" aria-pressed="true" title="Roll trains forward along their routes between position reports">Motion: on</button>
+  <div class="layers" id="layers">
+    <div class="lt">Layers</div>
+    <label><input type="checkbox" checked disabled> Amtrak live trains</label>
+    <label><input type="checkbox" id="lay-via"> VIA Rail (Canada) live trains</label>
+    <label><input type="checkbox" id="lay-freight"> Freight rail network</label>
+    <label><input type="checkbox" id="lay-motion" checked> Roll trains between reports</label>
+    <div class="small" id="freight-hint" hidden>Zoom in to load the rail network for this area.</div>
+  </div>
   <div class="legend">
     <span><i style="background:var(--good)"></i>On time</span>
     <span><i style="background:var(--warn)"></i>Running late</span>
     <span><i style="background:var(--bad)"></i>Very late / disruption</span>
     <span><i style="background:var(--gold);border:2px solid var(--ink)"></i>Station</span>
+    <span id="legend-via" hidden><i style="background:#8a1c3a"></i>VIA Rail</span>
+    <span id="legend-freight" hidden><i style="background:#6b6355;border-radius:0;height:3px"></i>Freight line</span>
   </div>
   <aside class="ledger" id="ledger" aria-live="polite">
     <header>
@@ -248,6 +262,8 @@ const API = 'https://api-v3.amtraker.com/v3';
 const ROUTES_URL = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/NTAD_Amtrak_Routes/FeatureServer/0/query?where=1%3D1&outFields=name,ROUTE_URL&outSR=4326&f=geojson';
 const ROUTE_COLORS = ['#cf5a2a','#1e4a3a','#5f9fb8','#b8791f','#7a3b6b','#2f7a4f','#a93a2c','#3f6a9c','#8c6a2b','#4a5d8a'];
 const REFRESH_MS = 30000;
+const VIA_URL = 'https://tsimobile.viarail.ca/data/allData.json';
+const NARN_URL = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/NTAD_North_American_Rail_Network_Lines/FeatureServer/0/query';
 const MAX_EXTRAP_MS = 4*60000; // never project a train more than 4 minutes past its last fix
 
 const $ = id => document.getElementById(id);
@@ -307,6 +323,7 @@ const map = L.map('map',{zoomControl:true, worldCopyJump:false}).setView([38.5,-
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}',{
   maxZoom:16, attribution:'Tiles © Esri — National Geographic, DeLorme, HERE, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA'
 }).addTo(map);
+map.createPane('freight'); map.getPane('freight').style.zIndex=350;
 const routeLayer = L.layerGroup().addTo(map);
 const stopLayer = L.layerGroup().addTo(map);
 const trainLayer = L.layerGroup().addTo(map);
@@ -417,9 +434,10 @@ function animateTrains(){
   const now=Date.now();
   markers.forEach(m=>{
     let target=m.real;
-    if(motionOn && m.speedKmh>2 && m.track && m.idx>=0 && m.dir!==0){
+    if(motionOn && m.speedKmh>2){
       const dt=Math.min(MAX_EXTRAP_MS, now-m.t0); const km=m.speedKmh*dt/3600000;
-      target=alongTrack(m.track,m.idx,m.dir,km)||m.real;
+      if(m.track && m.idx>=0 && m.dir!==0) target=alongTrack(m.track,m.idx,m.dir,km)||m.real;
+      else if(m.bearing!=null){ const b=m.bearing*Math.PI/180; target=[m.real[0]+km/111.32*Math.cos(b), m.real[1]+km/(111.32*Math.cos(m.real[0]*Math.PI/180))*Math.sin(b)]; }
     }
     let pos=target;
     if(m.glideStart){ const f=Math.min(1,(now-m.glideStart)/1500); const e=1-Math.pow(1-f,3); pos=[m.from[0]+(target[0]-m.from[0])*e, m.from[1]+(target[1]-m.from[1])*e]; if(f>=1) m.glideStart=0; }
@@ -428,7 +446,7 @@ function animateTrains(){
   setTimeout(()=>requestAnimationFrame(animateTrains), 500);
 }
 requestAnimationFrame(animateTrains);
-$('motion-toggle').addEventListener('click',()=>{ motionOn=!motionOn; const b=$('motion-toggle'); b.setAttribute('aria-pressed',String(motionOn)); b.textContent='Motion: '+(motionOn?'on':'off'); });
+$('lay-motion').addEventListener('change',e=>{ motionOn=e.target.checked; });
 map.on('popupopen',e=>{
   const a=e.popup.getElement()?.querySelector('.show-stops');
   if(a) a.addEventListener('click',ev=>{ ev.preventDefault(); const t=state.trains.find(x=>x.trainID===a.dataset.train); if(t) showTrain(t); });
@@ -561,6 +579,99 @@ function showTrain(t){
   $('ledger-body').querySelectorAll('.stops li').forEach(el=>el.addEventListener('click',()=>{ const s=state.stations[el.dataset.code]; if(s&&s.lat) map.flyTo([s.lat,s.lon],9); }));
   const n=$('ledger-body').querySelector('.stops li.next'); if(n) n.scrollIntoView({block:'center'});
 }
+
+/* ---------- VIA Rail (Canada) ---------- */
+const viaLayer = L.layerGroup();
+let viaTimer=null, viaWarned=false;
+function viaTimeliness(tr){ const late=Math.max(0,...(tr.times||[]).filter(x=>x.diffMin!=null).map(x=>x.diffMin)); return late>=60?'bad':late>=10?'warn':'good'; }
+function viaIcon(tr,cls){ const deg=Math.round(tr.direction||0); return L.divIcon({className:'',html:`<div class="train-icon via ${cls}" style="transform:rotate(${deg}deg)"><div class="arrow"></div></div>`,iconSize:[22,22],iconAnchor:[11,11]}); }
+function viaTime(x){ return (typeof x==='string' && x.length>10 && !x.includes('mdash')) ? x : null; }
+function showVia(num,tr){
+  if(tr.lat&&tr.lng) map.flyTo([tr.lat,tr.lng],Math.max(map.getZoom(),7));
+  const poll=Date.parse(tr.poll||'')||Date.now();
+  const rows=(tr.times||[]).map((x,i)=>{
+    const sch=viaTime(x.scheduled)||viaTime(x.arrival?.scheduled)||viaTime(x.departure?.scheduled);
+    const est=viaTime(x.estimated)||viaTime(x.arrival?.estimated)||viaTime(x.departure?.estimated);
+    const done=(est||sch)&&Date.parse(est||sch)<poll-60000&&x.eta!=='ARR'&&!(x.eta&&/min|hr/.test(x.eta));
+    const cls=x.diff==='bad'?'bad':x.diff==='med'?'warn':'';
+    const schT=fmtTime(sch,x.tz), estT=fmtTime(est,x.tz);
+    const timeHtml = estT!=='—'&&estT!==schT ? `<span class="time"><s class="small">${esc(schT)}</s> <b class="${cls}">${esc(estT)}</b>${x.eta&&x.eta!=='&mdash;'?` <span class="small">${esc(x.eta)}</span>`:''}</span>` : `<span class="time">${esc(schT)}${done?' <span class="small">left</span>':''}</span>`;
+    return `<li class="${i===0||i===tr.times.length-1?'end':''}${done?' done':''}"><span class="code">${esc(x.code||'')}</span><span>${esc(x.station||'')}</span>${timeHtml}</li>`;
+  }).join('');
+  const alerts=(tr.alerts||[]).map(a=>`<p class="small">⚠ ${esc(a.header?.en||'')} ${esc(a.description?.en||'')}</p>`).join('');
+  openLedger(`VIA Rail #${num.replace(/\s*\(.*\)/,'')}`, `
+    <p>${esc(tr.from||'')} → ${esc(tr.to||'')} <span class="small">· ${esc(tr.instance||'')}</span></p>
+    <p><span class="chip ${viaTimeliness(tr)}">${tr.arrived?'Arrived':tr.departed?'En route':'Not yet departed'}</span> ${tr.speed?`<span class="chip">${Math.round(tr.speed*0.621)} mph</span>`:''}</p>
+    ${alerts}
+    <h3>Stops &amp; ETAs (local time)</h3><ul class="stops">${rows}</ul>
+    <p class="small">Struck-through times are the schedule; bold times are VIA's current estimate.</p>
+    <p><a class="btn" href="https://www.viarail.ca/en" target="_blank" rel="noopener">Book on VIA Rail</a></p>`);
+}
+async function loadVia(){
+  let data; try{ data=await getJSON(VIA_URL); }catch(e){ if(!viaWarned){ viaWarned=true; toast('VIA Rail feed is blocking browser requests right now; Canadian trains unavailable.',8000);} return; }
+  const seen=new Set(); let n=0; const now=Date.now();
+  Object.entries(data).forEach(([num,tr])=>{
+    if(!tr||tr.lat==null||tr.lng==null||tr.arrived) return;
+    n++; const id='via:'+num; seen.add(id); const real=[tr.lat,tr.lng]; const cls=viaTimeliness(tr);
+    let m=markers.get(id);
+    const t0=Math.max(Date.parse(tr.poll||'')||now, now-MAX_EXTRAP_MS/2);
+    if(!m){
+      const marker=L.marker(real,{icon:viaIcon(tr,cls),zIndexOffset:900}).addTo(viaLayer);
+      marker.bindTooltip(''); marker.on('click',()=>showVia(num,m.t));
+      m={marker,real,shown:real,from:real,glideStart:0,t0,speedKmh:tr.speed||0,dir:0,track:null,idx:-1,bearing:tr.direction,t:tr,via:true};
+      markers.set(id,m);
+    }else{
+      const moved=kmBetween(m.real,real)>0.02;
+      m.from=m.shown; m.real=real; m.glideStart=moved?now:0; m.t0=t0; m.speedKmh=tr.speed||0; m.bearing=tr.direction; m.t=tr; m.marker.setIcon(viaIcon(tr,cls));
+    }
+    m.marker.setTooltipContent(`VIA ${num.replace(/\s*\(.*\)/,'')} · ${tr.from} → ${tr.to}`);
+  });
+  markers.forEach((m,id)=>{ if(m.via && !seen.has(id)){ viaLayer.removeLayer(m.marker); markers.delete(id); } });
+  $('st-via').textContent=n;
+}
+$('lay-via').addEventListener('change',e=>{
+  const on=e.target.checked; $('legend-via').hidden=!on; $('st-via-wrap').hidden=!on;
+  if(on){ viaLayer.addTo(map); loadVia(); viaTimer=setInterval(loadVia,REFRESH_MS); }
+  else{ clearInterval(viaTimer); map.removeLayer(viaLayer); markers.forEach((m,id)=>{ if(m.via) markers.delete(id); }); viaLayer.clearLayers(); }
+});
+
+/* ---------- Freight rail network (USDOT NARN) ---------- */
+const freightLayer = L.layerGroup();
+const freightCache = new Map(); // FRAARCID -> true
+let freightOn=false, freightBusy=false, freightSeq=0, freightMoveTimer=null, freightTier=0;
+const OWNER_COLORS = {BNSF:'#e8731a',UP:'#e3c21c',CSXT:'#1b5fae',NS:'#262626',CPKC:'#b4121b',CPRS:'#b4121b',KCS:'#b4121b',CN:'#1f7a3a',CNGT:'#1f7a3a',CNIC:'#1f7a3a',WC:'#1f7a3a'};
+function ownerColor(o){ return OWNER_COLORS[o]||'#6b6355'; }
+async function loadFreight(){
+  if(!freightOn) return;
+  const z=map.getZoom(); $('freight-hint').hidden = z>=6;
+  if(z<6){ return; }
+  const tier = z>=11?3:z>=9?2:1;
+  if(tier!==freightTier){ freightTier=tier; freightLayer.clearLayers(); freightCache.clear(); }
+  if(freightBusy) return; freightBusy=true; const seq=++freightSeq;
+  try{
+    const b=map.getBounds().pad(0.15);
+    const net = z>=11 ? "NET IN ('M','I','S','Y','O')" : z>=9 ? "NET IN ('M','I','S')" : "NET='M'";
+    const base = `${NARN_URL}?where=${encodeURIComponent(net)}&geometry=${encodeURIComponent(JSON.stringify({xmin:b.getWest(),ymin:b.getSouth(),xmax:b.getEast(),ymax:b.getNorth(),spatialReference:{wkid:4326}}))}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=FRAARCID,RROWNER1,RROWNER2,TRKRGHTS1,TRKRGHTS2,SUBDIV,TRACKS,NET,MILES&outSR=4326&geometryPrecision=${z>=9?5:3}&f=geojson&resultRecordCount=2000`;
+    for(let page=0; page<4; page++){
+      const gj=await getJSON(base+`&resultOffset=${page*2000}`);
+      if(seq!==freightSeq||!freightOn) return;
+      const feats=(gj.features||[]).filter(f=>!freightCache.has(f.properties.FRAARCID));
+      feats.forEach(f=>freightCache.set(f.properties.FRAARCID,true));
+      L.geoJSON({type:'FeatureCollection',features:feats},{
+        pane:'freight', style:f=>({color:ownerColor(f.properties.RROWNER1),weight:f.properties.NET==='M'?1.8:1,opacity:.75,dashArray:f.properties.NET==='M'?null:'3 4'}),
+        onEachFeature:(f,l)=>{ const p=f.properties; l.bindPopup(`<h4>${esc(p.RROWNER1||'Unknown owner')}${p.RROWNER2?' / '+esc(p.RROWNER2):''}</h4>${p.SUBDIV?`<div>${esc(p.SUBDIV)} Subdivision</div>`:''}<div class="small">${p.TRACKS?esc(p.TRACKS)+' track · ':''}${({M:'Main line',I:'Industrial lead',S:'Siding',Y:'Yard',O:'Other'})[p.NET]||esc(p.NET||'')}${p.TRKRGHTS1?' · rights: '+esc(p.TRKRGHTS1)+(p.TRKRGHTS2?', '+esc(p.TRKRGHTS2):''):''}</div>`); }
+      }).addTo(freightLayer);
+      if(!gj.properties?.exceededTransferLimit && (gj.features||[]).length<2000) break;
+    }
+  }catch(e){ toast('Couldn’t load the rail network for this area.',5000); }
+  finally{ freightBusy=false; }
+}
+$('lay-freight').addEventListener('change',e=>{
+  freightOn=e.target.checked; $('legend-freight').hidden=!freightOn;
+  if(freightOn){ freightLayer.addTo(map); loadFreight(); }
+  else{ map.removeLayer(freightLayer); freightLayer.clearLayers(); freightCache.clear(); $('freight-hint').hidden=true; }
+});
+map.on('moveend zoomend',()=>{ if(!freightOn) return; clearTimeout(freightMoveTimer); freightMoveTimer=setTimeout(loadFreight,350); });
 
 /* ---------- departures ---------- */
 function renderDepartures(){
