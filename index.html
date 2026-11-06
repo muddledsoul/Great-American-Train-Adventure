@@ -259,7 +259,10 @@ footer a{color:var(--gold)}
 (function(){
 'use strict';
 const API = 'https://api-v3.amtraker.com/v3';
-const ROUTES_URL = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/NTAD_Amtrak_Routes/FeatureServer/0/query?where=1%3D1&outFields=name,ROUTE_URL&outSR=4326&f=geojson';
+const ROUTES_URL = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/NTAD_Amtrak_Routes/FeatureServer/0/query?where=1%3D1&outFields=name,ROUTE_URL&outSR=4326&geometryPrecision=4&f=geojson';
+const LOCAL_ROUTES = 'data/routes.geojson';   // refreshed weekly by the GitHub Action
+const LOCAL_STATIONS = 'data/stations.json';
+const CACHE_NAME = 'railway-data-v1';
 const ROUTE_COLORS = ['#cf5a2a','#1e4a3a','#5f9fb8','#b8791f','#7a3b6b','#2f7a4f','#a93a2c','#3f6a9c','#8c6a2b','#4a5d8a'];
 const REFRESH_MS = 30000;
 const VIA_URL = 'https://tsimobile.viarail.ca/data/allData.json';
@@ -755,9 +758,21 @@ $('swap').addEventListener('click',()=>{ const a=$('from-station'), b=$('to-stat
 
 /* ---------- data loading ---------- */
 async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(r.status+' '+url); return r.json(); }
+// Static reference data: try the copy bundled with the site, then the browser cache, then the live service. Whatever wins is cached for next time.
+async function getStatic(localUrl, liveUrl){
+  let cache=null; try{ cache=await caches.open(CACHE_NAME); }catch(e){}
+  const tryFetch=async u=>{ const r=await fetch(u,{cache:'force-cache'}); if(!r.ok) throw new Error(r.status); return r; };
+  for(const u of [localUrl, liveUrl]){
+    try{ const r=await tryFetch(u); const data=await r.clone().json(); if(cache){ try{ await cache.put(localUrl, r); }catch(e){} } return data; }
+    catch(e){
+      if(cache){ try{ const c=await cache.match(localUrl); if(c) return c.json(); }catch(e2){} }
+    }
+  }
+  throw new Error('no data for '+localUrl);
+}
 
 async function loadStations(){
-  const data=await getJSON(API+'/stations');
+  const data=await getStatic(LOCAL_STATIONS, API+'/stations');
   state.stations=data;
   const dl=$('station-list'); dl.innerHTML='';
   Object.values(data).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(s=>{
@@ -767,7 +782,7 @@ async function loadStations(){
 }
 
 async function loadRoutes(){
-  const gj=await getJSON(ROUTES_URL);
+  const gj=await getStatic(LOCAL_ROUTES, ROUTES_URL);
   state.routes=(gj.features||[]).filter(f=>f.geometry&&f.properties&&f.properties.name).map((f,i)=>({
     id:'r'+i, name:f.properties.name.trim(), norm:norm(f.properties.name), url:f.properties.ROUTE_URL, feature:f, stops:[], trains:[], liveNames:new Set()
   })).sort((a,b)=>a.name.localeCompare(b.name));
@@ -791,10 +806,12 @@ async function loadTrains(){
 
 async function init(){
   $('dep-date').value=new Date().toLocaleDateString('en-CA');
+  const trainsP = loadTrains().catch(()=>toast('Couldn’t reach the live train feed. Retrying shortly…', 8000));
   const results=await Promise.allSettled([loadStations(), loadRoutes()]);
-  results.forEach((r,i)=>{ if(r.status==='rejected') toast(i===0?'Couldn’t load the station list.':'Couldn’t load the route map lines (USDOT service unreachable).', 8000); });
+  results.forEach((r,i)=>{ if(r.status==='rejected') toast(i===0?'Couldn’t load the station list.':'Couldn’t load the route map lines.', 8000); });
   if(state.routes.length && Object.keys(state.stations).length) computeGeoStops();
-  try{ await loadTrains(); }catch(e){ toast('Couldn’t reach the live train feed. Retrying in a minute…', 8000); }
+  await trainsP;
+  if(state.trains.length){ rebuildRouteIndex(); drawTrains(); }
   setInterval(()=>loadTrains().catch(()=>{}), REFRESH_MS);
 }
 init();
